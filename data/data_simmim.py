@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.data._utils.collate import default_collate
 from torchvision.datasets import ImageFolder
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from .mimic_dataset import MimicCXRImagesSimple
 
 
 class MaskGenerator:
@@ -47,12 +48,15 @@ class MaskGenerator:
 
 class SimMIMTransform:
     def __init__(self, config):
+        mean = config.DATA.MEAN if hasattr(config.DATA, 'MEAN') and config.DATA.MEAN else IMAGENET_DEFAULT_MEAN
+        std = config.DATA.STD if hasattr(config.DATA, 'STD') and config.DATA.STD else IMAGENET_DEFAULT_STD
+
         self.transform_img = T.Compose([
             T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
             T.RandomResizedCrop(config.DATA.IMG_SIZE, scale=(0.67, 1.), ratio=(3. / 4., 4. / 3.)),
             T.RandomHorizontalFlip(),
             T.ToTensor(),
-            T.Normalize(mean=torch.tensor(IMAGENET_DEFAULT_MEAN),std=torch.tensor(IMAGENET_DEFAULT_STD)),
+            T.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
         ])
  
         if config.MODEL.TYPE == 'swin':
@@ -95,7 +99,19 @@ def build_loader_simmim(config, logger):
     transform = SimMIMTransform(config)
     logger.info(f'Pre-train data transform:\n{transform}')
 
-    dataset = ImageFolder(config.DATA.DATA_PATH, transform)
+    # Choose dataset based on config
+    if hasattr(config.DATA, 'DATASET') and str(config.DATA.DATASET).lower() == 'mimic':
+        json_path = getattr(config.DATA, 'MIMIC_JSON', '')
+        if not json_path:
+            raise ValueError('DATA.MIMIC_JSON must be set when DATA.DATASET == "mimic"')
+        dataset = MimicCXRImagesSimple(
+            json_path=json_path,
+            root=config.DATA.DATA_PATH,
+            img_paths_key=getattr(config.DATA, 'MIMIC_IMG_PATHS_KEY', 'images'),
+            transform=transform,
+        )
+    else:
+        dataset = ImageFolder(config.DATA.DATA_PATH, transform)
     logger.info(f'Build dataset: train images = {len(dataset)}')
     
     sampler = DistributedSampler(dataset, num_replicas=dist.get_world_size(), rank=dist.get_rank(), shuffle=True)

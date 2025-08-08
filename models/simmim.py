@@ -26,7 +26,10 @@ class SwinTransformerForSimMIM(SwinTransformer):
         trunc_normal_(self.mask_token, mean=0., std=.02)
 
     def forward(self, x, mask):
+        # timm ViT patch_embed returns a tensor or a tuple depending on variant; handle both
         x = self.patch_embed(x)
+        if isinstance(x, (list, tuple)):
+            x = x[0]
 
         assert mask is not None
         B, L, _ = x.shape
@@ -60,7 +63,11 @@ class VisionTransformerForSimMIM(VisionTransformer):
 
         assert self.num_classes == 0
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        embed_dim = getattr(self, 'embed_dim', None) or getattr(self, 'num_features', None)
+        if embed_dim is None:
+            # Best effort: try to pull from backbone if available
+            embed_dim = getattr(getattr(self, 'backbone', None), 'embed_dim', 768)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self._trunc_normal_(self.mask_token, std=.02)
 
     def _trunc_normal_(self, tensor, mean=0., std=1.):
@@ -85,7 +92,8 @@ class VisionTransformerForSimMIM(VisionTransformer):
 
         rel_pos_bias = self.rel_pos_bias() if self.rel_pos_bias is not None else None
         for blk in self.blocks:
-            x = blk(x, rel_pos_bias=rel_pos_bias)
+            # x = blk(x, rel_pos_bias=rel_pos_bias)
+            x = blk(x)
         x = self.norm(x)
 
         x = x[:, 1:]

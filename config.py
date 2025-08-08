@@ -33,6 +33,12 @@ _C.DATA.INTERPOLATION = 'bicubic'
 _C.DATA.PIN_MEMORY = True
 # Number of data loading threads
 _C.DATA.NUM_WORKERS = 8
+# Optional normalization overrides
+_C.DATA.MEAN = []  # e.g., [0.5, 0.5, 0.5]
+_C.DATA.STD = []   # e.g., [0.25, 0.25, 0.25]
+ # For MIMIC dataset
+_C.DATA.MIMIC_JSON = ''
+_C.DATA.MIMIC_IMG_PATHS_KEY = 'images'
 
 # [SimMIM] Mask patch size for MaskGenerator
 _C.DATA.MASK_PATCH_SIZE = 32
@@ -86,6 +92,10 @@ _C.MODEL.VIT.USE_APE = False
 _C.MODEL.VIT.USE_RPB = False
 _C.MODEL.VIT.USE_SHARED_RPB = True
 _C.MODEL.VIT.USE_MEAN_POOLING = False
+# timm-backed ViT options
+_C.MODEL.VIT.MODEL = ''            # e.g., 'vit_base_patch16_224' (timm model name)
+_C.MODEL.VIT.MODEL_NAME = ''       # alias, in case some configs prefer MODEL_NAME
+_C.MODEL.VIT.MODEL_ARGS = CN()     # arbitrary kwargs forwarded to timm.create_model
 
 # -----------------------------------------------------------------------------
 # Training settings

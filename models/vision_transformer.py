@@ -1,339 +1,160 @@
-# --------------------------------------------------------
-# SimMIM
-# Copyright (c) 2021 Microsoft
-# Licensed under The MIT License [see LICENSE for details]
-# Based on BEIT code bases (https://github.com/microsoft/unilm/tree/master/beit)
-# Written by Yutong Lin, Zhenda Xie
-# --------------------------------------------------------
+"""
+Minimal timm-backed Vision Transformer wrapper.
 
-import math
-from functools import partial
+This replaces the hand-rolled ViT with a thin wrapper around timm's ViT while
+preserving the attributes that SimMIM's code expects (e.g., patch_embed,
+cls_token, pos_embed, blocks, norm, head, etc.). It also supports passing
+arbitrary model kwargs via a config-provided MODEL_ARGS.
+"""
+
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
+from timm import create_model
+from timm.models.layers import trunc_normal_
 
 
-class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        # x = self.drop(x)
-        # comment out this for the orignal BERT implement
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
-
-
-class Attention(nn.Module):
-    def __init__(
-            self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
-            proj_drop=0., window_size=None, attn_head_dim=None):
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        if attn_head_dim is not None:
-            head_dim = attn_head_dim
-        all_head_dim = head_dim * self.num_heads
-        self.scale = qk_scale or head_dim ** -0.5
-
-        self.qkv = nn.Linear(dim, all_head_dim * 3, bias=False)
-        if qkv_bias:
-            self.q_bias = nn.Parameter(torch.zeros(all_head_dim))
-            self.v_bias = nn.Parameter(torch.zeros(all_head_dim))
-        else:
-            self.q_bias = None
-            self.v_bias = None
-
-        if window_size:
-            self.window_size = window_size
-            # cls to token & token to cls & cls to cls
-            self.num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
-            self.relative_position_bias_table = nn.Parameter(
-                torch.zeros(self.num_relative_distance, num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-
-            # get pair-wise relative position index for each token inside the window
-            coords_h = torch.arange(window_size[0])
-            coords_w = torch.arange(window_size[1])
-            coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
-            coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-            relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-            relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-            relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-            relative_coords[:, :, 1] += window_size[1] - 1
-            relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-            relative_position_index = \
-                torch.zeros(size=(window_size[0] * window_size[1] + 1, ) * 2, dtype=relative_coords.dtype)
-            relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-            relative_position_index[0, 0:] = self.num_relative_distance - 3
-            relative_position_index[0:, 0] = self.num_relative_distance - 2
-            relative_position_index[0, 0] = self.num_relative_distance - 1
-
-            self.register_buffer("relative_position_index", relative_position_index)
-        else:
-            self.window_size = None
-            self.relative_position_bias_table = None
-            self.relative_position_index = None
-
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(all_head_dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-    def forward(self, x, rel_pos_bias=None):
-        B, N, C = x.shape
-        qkv_bias = None
-        if self.q_bias is not None:
-            qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
-        qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
-        qkv = qkv.reshape(B, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
-
-        q = q * self.scale
-        attn = (q @ k.transpose(-2, -1))
-
-        if self.relative_position_bias_table is not None:
-            relative_position_bias = \
-                self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                    self.window_size[0] * self.window_size[1] + 1,
-                    self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
-            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-            attn = attn + relative_position_bias.unsqueeze(0)
-
-        if rel_pos_bias is not None:
-            attn = attn + rel_pos_bias
-
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-
-class Block(nn.Module):
-
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 window_size=None, attn_head_dim=None):
-        super().__init__()
-        self.norm1 = norm_layer(dim)
-        self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, window_size=window_size, attn_head_dim=attn_head_dim)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
-        if init_values is not None:
-            self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-            self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-        else:
-            self.gamma_1, self.gamma_2 = None, None
-
-    def forward(self, x, rel_pos_bias=None):
-        if self.gamma_1 is None:
-            x = x + self.drop_path(self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-        else:
-            x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
-            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
-        return x
-
-
-class PatchEmbed(nn.Module):
-    """ Image to Patch Embedding
-    """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
-        super().__init__()
-        img_size = to_2tuple(img_size)
-        patch_size = to_2tuple(patch_size)
-        num_patches = (img_size[1] // patch_size[1]) * (img_size[0] // patch_size[0])
-        self.patch_shape = (img_size[0] // patch_size[0], img_size[1] // patch_size[1])
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_patches = num_patches
-
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
-
-    def forward(self, x, **kwargs):
-        B, C, H, W = x.shape
-        # FIXME look at relaxing size constraints
-        assert H == self.img_size[0] and W == self.img_size[1], \
-            f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
-        x = self.proj(x).flatten(2).transpose(1, 2)
-        return x
-
-
-class RelativePositionBias(nn.Module):
-
-    def __init__(self, window_size, num_heads):
-        super().__init__()
-        self.window_size = window_size
-        self.num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros(self.num_relative_distance, num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-        # cls to token & token 2 cls & cls to cls
-
-        # get pair-wise relative position index for each token inside the window
-        coords_h = torch.arange(window_size[0])
-        coords_w = torch.arange(window_size[1])
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-        relative_coords[:, :, 1] += window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-        relative_position_index = \
-            torch.zeros(size=(window_size[0] * window_size[1] + 1,) * 2, dtype=relative_coords.dtype)
-        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        relative_position_index[0, 0:] = self.num_relative_distance - 3
-        relative_position_index[0:, 0] = self.num_relative_distance - 2
-        relative_position_index[0, 0] = self.num_relative_distance - 1
-
-        self.register_buffer("relative_position_index", relative_position_index)
-
-    def forward(self):
-        relative_position_bias = \
-            self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1] + 1,
-                self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
-        return relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+def _cn_to_dict(maybe_cn: Any) -> Dict[str, Any]:
+    try:
+        # yacs CfgNode has a .clone()/.to_dict() in some forks; otherwise, recurse
+        return {k: _cn_to_dict(v) for k, v in maybe_cn.items()}
+    except Exception:
+        return maybe_cn
 
 
 class VisionTransformer(nn.Module):
-    """ Vision Transformer with support for patch or hybrid CNN input stage
-    """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
-                 num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
-                 drop_path_rate=0., norm_layer=nn.LayerNorm, init_values=None,
-                 use_abs_pos_emb=True, use_rel_pos_bias=False, use_shared_rel_pos_bias=False,
-                 use_mean_pooling=True, init_scale=0.001):
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        model_args: Optional[Dict[str, Any]] = None,
+        **legacy_kwargs: Any,
+    ) -> None:
         super().__init__()
-        self.num_classes = num_classes
-        self.num_features = self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        self.in_chans = in_chans
 
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
-        num_patches = self.patch_embed.num_patches
-
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        if use_abs_pos_emb:
-            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        # If an explicit timm model name is given, create via registry; otherwise
+        # fall back to constructing a vanilla timm VisionTransformer by kwargs.
+        backbone: nn.Module
+        if model_name is not None:
+            backbone = create_model(model_name, **(model_args or {}))
         else:
-            self.pos_embed = None
-        self.pos_drop = nn.Dropout(p=drop_rate)
+            # Conservative subset of kwargs supported by timm VisionTransformer ctor
+            allowed_keys = {
+                "img_size",
+                "patch_size",
+                "in_chans",
+                "num_classes",
+                "embed_dim",
+                "depth",
+                "num_heads",
+                "mlp_ratio",
+                "qkv_bias",
+                "drop_rate",
+                "drop_path_rate",
+                "norm_layer",
+            }
+            ctor_kwargs = {k: v for k, v in legacy_kwargs.items() if k in allowed_keys}
+            # Defaults to a common ViT configuration if not provided
+            ctor_kwargs.setdefault("img_size", legacy_kwargs.get("img_size", 224))
+            ctor_kwargs.setdefault("patch_size", legacy_kwargs.get("patch_size", 16))
+            ctor_kwargs.setdefault("in_chans", legacy_kwargs.get("in_chans", 3))
+            ctor_kwargs.setdefault("num_classes", legacy_kwargs.get("num_classes", 1000))
+            ctor_kwargs.setdefault("embed_dim", legacy_kwargs.get("embed_dim", 768))
+            ctor_kwargs.setdefault("depth", legacy_kwargs.get("depth", 12))
+            ctor_kwargs.setdefault("num_heads", legacy_kwargs.get("num_heads", 12))
+            ctor_kwargs.setdefault("mlp_ratio", legacy_kwargs.get("mlp_ratio", 4.0))
+            ctor_kwargs.setdefault("qkv_bias", legacy_kwargs.get("qkv_bias", True))
+            ctor_kwargs.setdefault("drop_rate", legacy_kwargs.get("drop_rate", 0.0))
+            ctor_kwargs.setdefault("drop_path_rate", legacy_kwargs.get("drop_path_rate", 0.0))
 
-        if use_shared_rel_pos_bias:
-            self.rel_pos_bias = RelativePositionBias(window_size=self.patch_embed.patch_shape, num_heads=num_heads)
+            # Import here to avoid shadowing our wrapper name
+            from timm.models.vision_transformer import VisionTransformer as TimmViT
+
+            backbone = TimmViT(**ctor_kwargs)  # type: ignore[arg-type]
+
+        # Keep a handle to the backbone and expose expected attributes for SimMIM
+        self.backbone = backbone
+
+        # Expose key submodules/parameters to preserve compatibility
+        self.patch_embed = getattr(backbone, "patch_embed", None)
+        self.cls_token = getattr(backbone, "cls_token", None)
+        self.pos_embed = getattr(backbone, "pos_embed", None)
+        self.pos_drop = getattr(backbone, "pos_drop", None)
+        self.blocks = getattr(backbone, "blocks", None)
+        self.norm = getattr(backbone, "norm", None)
+        self.head = getattr(backbone, "head", None)
+
+        # Best-effort metadata
+        self.embed_dim = getattr(backbone, "embed_dim", None)
+        self.num_features = getattr(backbone, "num_features", self.embed_dim)
+        self.in_chans = getattr(self.patch_embed, "proj", getattr(self.patch_embed, "proj", None)).in_channels \
+            if self.patch_embed is not None and hasattr(self.patch_embed, "proj") else legacy_kwargs.get("in_chans", 3)
+
+        # Patch size as int or tuple
+        if self.patch_embed is not None and hasattr(self.patch_embed, "patch_size"):
+            ps = getattr(self.patch_embed, "patch_size")
+            self.patch_size = ps[0] if isinstance(ps, (tuple, list)) else ps
         else:
-            self.rel_pos_bias = None
+            self.patch_size = legacy_kwargs.get("patch_size", 16)
 
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-        self.use_rel_pos_bias = use_rel_pos_bias
-        self.blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
-                init_values=init_values, window_size=self.patch_embed.patch_shape if use_rel_pos_bias else None)
-            for i in range(depth)])
-        self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
-        self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        # Relative position bias is not standard in timm ViT; keep a placeholder
+        self.rel_pos_bias = getattr(backbone, "rel_pos_bias", None)
 
-        if self.pos_embed is not None:
-            self._trunc_normal_(self.pos_embed, std=.02)
-        self._trunc_normal_(self.cls_token, std=.02)
-        if num_classes > 0:
-            self._trunc_normal_(self.head.weight, std=.02)
-        self.apply(self._init_weights)
-        self.fix_init_weight()
-
-        if num_classes > 0:
-            self.head.weight.data.mul_(init_scale)
-            self.head.bias.data.mul_(init_scale)
-
-    def _trunc_normal_(self, tensor, mean=0., std=1.):
+    def _trunc_normal_(self, tensor: torch.Tensor, mean: float = 0.0, std: float = 1.0) -> None:
         trunc_normal_(tensor, mean=mean, std=std)
 
-    def fix_init_weight(self):
-        def rescale(param, layer_id):
-            param.div_(math.sqrt(2.0 * layer_id))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
 
-        for layer_id, layer in enumerate(self.blocks):
-            rescale(layer.attn.proj.weight.data, layer_id + 1)
-            rescale(layer.mlp.fc2.weight.data, layer_id + 1)
+    # Optional helpers
+    def get_classifier(self):
+        if hasattr(self.backbone, "get_classifier"):
+            return self.backbone.get_classifier()
+        return self.head
 
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            self._trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            self._trunc_normal_(m.weight, std=.02)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def get_num_layers(self):
-        return len(self.blocks)
+    def reset_classifier(self, num_classes: int, global_pool: str = "") -> None:
+        if hasattr(self.backbone, "reset_classifier"):
+            self.backbone.reset_classifier(num_classes, global_pool)
+        else:
+            if self.embed_dim is None:
+                raise RuntimeError("embed_dim unknown; cannot reset classifier")
+            self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
-
-    def get_classifier(self):
-        return self.head
-
-    def reset_classifier(self, num_classes, global_pool=''):
-        self.num_classes = num_classes
-        self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
-
-    def forward_features(self, x):
-        x = self.patch_embed(x)
-        batch_size, seq_len, _ = x.size()
-
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        x = torch.cat((cls_tokens, x), dim=1)
+        if hasattr(self.backbone, "no_weight_decay"):
+            try:
+                return set(self.backbone.no_weight_decay())
+            except Exception:
+                pass
+        # Fallback to common tokens if present
+        tokens = set()
         if self.pos_embed is not None:
-            x = x + self.pos_embed
-        x = self.pos_drop(x)
-
-        rel_pos_bias = self.rel_pos_bias() if self.rel_pos_bias is not None else None
-        for blk in self.blocks:
-            x = blk(x, rel_pos_bias=rel_pos_bias)
-
-        x = self.norm(x)
-        if self.fc_norm is not None:
-            t = x[:, 1:, :]
-            return self.fc_norm(t.mean(1))
-        else:
-            return x[:, 0]
-
-    def forward(self, x):
-        x = self.forward_features(x)
-        x = self.head(x)
-        return x
+            tokens.add("pos_embed")
+        if self.cls_token is not None:
+            tokens.add("cls_token")
+        return tokens
 
 
-def build_vit(config):
-    model = VisionTransformer(
+def build_vit(config) -> nn.Module:
+    # Prefer explicit timm model name + args; fallback to legacy fields
+    model_name = None
+    model_args = {}
+
+    if hasattr(config.MODEL.VIT, "MODEL"):
+        model_name = config.MODEL.VIT.MODEL or None
+    if hasattr(config.MODEL.VIT, "MODEL_NAME") and not model_name:
+        model_name = config.MODEL.VIT.MODEL_NAME or None
+    if hasattr(config.MODEL.VIT, "MODEL_ARGS"):
+        model_args = _cn_to_dict(config.MODEL.VIT.MODEL_ARGS)
+
+    # Ensure num_classes aligns with top-level setting unless user overrides
+    model_args = dict(model_args or {})
+    model_args.setdefault("num_classes", config.MODEL.NUM_CLASSES)
+
+    if model_name is None:
+        # Legacy path: construct by explicit kwargs subset
+        return VisionTransformer(
         img_size=config.DATA.IMG_SIZE,
         patch_size=config.MODEL.VIT.PATCH_SIZE,
         in_chans=config.MODEL.VIT.IN_CHANS,
@@ -345,11 +166,7 @@ def build_vit(config):
         qkv_bias=config.MODEL.VIT.QKV_BIAS,
         drop_rate=config.MODEL.DROP_RATE,
         drop_path_rate=config.MODEL.DROP_PATH_RATE,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        init_values=config.MODEL.VIT.INIT_VALUES,
-        use_abs_pos_emb=config.MODEL.VIT.USE_APE,
-        use_rel_pos_bias=config.MODEL.VIT.USE_RPB,
-        use_shared_rel_pos_bias=config.MODEL.VIT.USE_SHARED_RPB,
-        use_mean_pooling=config.MODEL.VIT.USE_MEAN_POOLING)
+            norm_layer=nn.LayerNorm,
+        )
 
-    return model
+    return VisionTransformer(model_name=model_name, model_args=model_args)
