@@ -40,6 +40,10 @@ _C.DATA.STD = []   # e.g., [0.25, 0.25, 0.25]
 _C.DATA.MIMIC_JSON = ''
 _C.DATA.MIMIC_IMG_PATHS_KEY = 'images'
 
+# DataLoader performance knobs
+_C.DATA.PREFETCH_FACTOR = 2
+_C.DATA.PERSISTENT_WORKERS = False
+
 # [SimMIM] Mask patch size for MaskGenerator
 _C.DATA.MASK_PATCH_SIZE = 32
 # [SimMIM] Mask ratio for MaskGenerator
@@ -202,6 +206,18 @@ _C.LOCAL_RANK = 0
 
 # [SimMIM] path to pre-trained model
 _C.PRETRAINED = ''
+
+# -----------------------------------------------------------------------------
+# Weights & Biases (WANDB) settings
+# -----------------------------------------------------------------------------
+_C.WANDB = CN()
+_C.WANDB.ENABLE = True
+_C.WANDB.PROJECT = 'simmim'
+_C.WANDB.ENTITY = ''
+_C.WANDB.NAME = ''  # defaults to TAG if empty
+_C.WANDB.TAGS = []
+_C.WANDB.NOTES = ''
+_C.WANDB.OFFLINE = False
 
 
 def _update_config_from_file(config, cfg_file):

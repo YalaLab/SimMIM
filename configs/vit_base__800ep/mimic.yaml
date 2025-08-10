@@ -3,6 +3,8 @@ MODEL:
   NAME: simmim_pretrain
   DROP_PATH_RATE: 0.1
   VIT:
+    PATCH_SIZE: 16
+    IN_CHANS: 3
     EMBED_DIM: 768
     DEPTH: 12
     NUM_HEADS: 12
@@ -10,20 +12,40 @@ MODEL:
     USE_RPB: False
     USE_SHARED_RPB: True
     USE_MEAN_POOLING: False
+
 DATA:
-  IMG_SIZE: 224
+  DATASET: mimic
+  DATA_PATH: /home/ubuntu/scratch/data/mimic/mimic/raw/image_files/mimic-cxr-jpg-2.1.0.physionet.org/files
+  MIMIC_JSON: /home/ubuntu/scratch/data/mimic/mimic/mimic_metadata_miniclip/mimic_metadata_train_v2.json
+  # Override normalization if desired (defaults to ImageNet when not set)
+  MEAN: [0.473, 0.473, 0.473]
+  STD: [0.305, 0.305, 0.305]
+  IMG_SIZE: 448
   MASK_PATCH_SIZE: 32
   MASK_RATIO: 0.6
+  NUM_WORKERS: 6  # Optimal for 8 GPUs (DINOv2 uses similar ratio)
+  PREFETCH_FACTOR: 4  # Balanced prefetching
+  PERSISTENT_WORKERS: True  # Reuse worker processes
 TRAIN:
   EPOCHS: 800
   WARMUP_EPOCHS: 10
   BASE_LR: 1e-4
   WARMUP_LR: 5e-7
   WEIGHT_DECAY: 0.05
+  USE_CHECKPOINT: False  # Enable gradient checkpointing for memory efficiency
   LR_SCHEDULER:
     NAME: 'multistep'
     GAMMA: 0.1
     MULTISTEPS: [700,]
-PRINT_FREQ: 100
+PRINT_FREQ: 10
 SAVE_FREQ: 5
-TAG: simmim_pretrain__vit_base__img224__800ep
+TAG: simmim_vitb_testrun
+
+WANDB:
+  ENABLE: True
+  PROJECT: vl-ssl
+  ENTITY: yala-lab
+  NAME: simmim_test
+  TAGS: []
+  NOTES: ""
+  OFFLINE: False

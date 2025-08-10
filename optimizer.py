@@ -37,8 +37,24 @@ def build_pretrain_optimizer(config, model, logger):
         optimizer = optim.SGD(parameters, momentum=config.TRAIN.OPTIMIZER.MOMENTUM, nesterov=True,
                               lr=config.TRAIN.BASE_LR, weight_decay=config.TRAIN.WEIGHT_DECAY)
     elif opt_lower == 'adamw':
-        optimizer = optim.AdamW(parameters, eps=config.TRAIN.OPTIMIZER.EPS, betas=config.TRAIN.OPTIMIZER.BETAS,
-                                lr=config.TRAIN.BASE_LR, weight_decay=config.TRAIN.WEIGHT_DECAY)
+        # Prefer fused AdamW when available (PyTorch 2.0+ with CUDA)
+        try:
+            optimizer = optim.AdamW(
+                parameters,
+                eps=config.TRAIN.OPTIMIZER.EPS,
+                betas=config.TRAIN.OPTIMIZER.BETAS,
+                lr=config.TRAIN.BASE_LR,
+                weight_decay=config.TRAIN.WEIGHT_DECAY,
+                fused=True,
+            )
+        except TypeError:
+            optimizer = optim.AdamW(
+                parameters,
+                eps=config.TRAIN.OPTIMIZER.EPS,
+                betas=config.TRAIN.OPTIMIZER.BETAS,
+                lr=config.TRAIN.BASE_LR,
+                weight_decay=config.TRAIN.WEIGHT_DECAY,
+            )
 
     logger.info(optimizer)
     return optimizer

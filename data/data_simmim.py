@@ -52,7 +52,6 @@ class SimMIMTransform:
         std = config.DATA.STD if hasattr(config.DATA, 'STD') and config.DATA.STD else IMAGENET_DEFAULT_STD
 
         self.transform_img = T.Compose([
-            T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
             T.RandomResizedCrop(config.DATA.IMG_SIZE, scale=(0.67, 1.), ratio=(3. / 4., 4. / 3.)),
             T.RandomHorizontalFlip(),
             T.ToTensor(),
@@ -115,6 +114,25 @@ def build_loader_simmim(config, logger):
     logger.info(f'Build dataset: train images = {len(dataset)}')
     
     sampler = DistributedSampler(dataset, num_replicas=dist.get_world_size(), rank=dist.get_rank(), shuffle=True)
-    dataloader = DataLoader(dataset, config.DATA.BATCH_SIZE, sampler=sampler, num_workers=config.DATA.NUM_WORKERS, pin_memory=True, drop_last=True, collate_fn=collate_fn)
+
+    # Build DataLoader with performance-related kwargs
+    num_workers = int(getattr(config.DATA, 'NUM_WORKERS', 0))
+    dataloader_kwargs = {
+        'batch_size': config.DATA.BATCH_SIZE,
+        'sampler': sampler,
+        'num_workers': num_workers,
+        'pin_memory': True,
+        'drop_last': True,
+        'collate_fn': collate_fn,
+    }
+
+    # Only pass prefetch_factor/persistent_workers when workers > 0
+    if num_workers > 0:
+        if hasattr(config.DATA, 'PREFETCH_FACTOR'):
+            dataloader_kwargs['prefetch_factor'] = int(config.DATA.PREFETCH_FACTOR)
+        if hasattr(config.DATA, 'PERSISTENT_WORKERS'):
+            dataloader_kwargs['persistent_workers'] = bool(config.DATA.PERSISTENT_WORKERS)
+
+    dataloader = DataLoader(dataset, **dataloader_kwargs)
     
     return dataloader

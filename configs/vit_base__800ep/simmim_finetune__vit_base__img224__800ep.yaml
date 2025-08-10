@@ -23,3 +23,4 @@ TRAIN:
 PRINT_FREQ: 100
 SAVE_FREQ: 5
 TAG: simmim_finetune__vit_base__img224__800ep
+

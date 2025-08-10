@@ -1,9 +1,15 @@
 import os
 from typing import List, Optional, Tuple, Any
+import io
+import warnings
+ 
 
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageFile
 from torchvision.datasets import VisionDataset
+
+# Allow loading of truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 def get_mimic_abs_path(img_meta: dict, root: str) -> str:
@@ -43,16 +49,13 @@ class MimicCXRImagesSimple(VisionDataset):
         # Load the split definition
         # Supports JSON lines and regular JSON arrays
         with open(json_path, "r") as f:
-            try:
-                # pandas can read JSON arrays or dicts. If it's JSONL, lines=True works.
-                df = pd.read_json(f, lines=True)
-            except ValueError:
-                f.seek(0)
-                df = pd.read_json(f)
+            df = pd.read_json(f)
 
         self._paths: List[str] = [
             get_mimic_abs_path(item[0], root) for item in df[img_paths_key]
         ]
+
+        
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -60,13 +63,23 @@ class MimicCXRImagesSimple(VisionDataset):
     def __getitem__(self, index: int) -> Tuple[Any, int]:
         path = self._paths[index]
         try:
-            img = Image.open(path).convert("RGB")
-        except FileNotFoundError as e:
-            raise RuntimeError(f"Image not found: {path}") from e
+            with open(path, 'rb') as f:
+                img_data = f.read()
+
+            img = Image.open(io.BytesIO(img_data)).convert("RGB")
+        except (FileNotFoundError, OSError, IOError) as e:
+            # Suppress specific PIL warnings that can slow down training
+            warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
+            warnings.filterwarnings("ignore", "Palette images with Transparency", UserWarning)
+            raise RuntimeError(f"Image not found or corrupted: {path}") from e
+
+        
 
         if self.transform is not None:
             img = self.transform(img)
 
         # Return a dummy target to preserve ((img, mask), target) structure downstream
         return img, 0
+
+    
 

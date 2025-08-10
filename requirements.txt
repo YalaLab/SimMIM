@@ -3,3 +3,5 @@ scipy
 termcolor
 timm
 yacs
+pandas
+wandb

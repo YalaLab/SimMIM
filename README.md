@@ -97,13 +97,13 @@ pip install -r requirements.txt
 
 To evaluate a provided model on ImageNet validation set, run:
 ```bash
-python -m torch.distributed.launch --nproc_per_node <num-of-gpus-to-use> main_finetune.py \
+python -m torch.distributed.launch --nproc_per_node <num-of-gpus-to-use> main_simmim.py \
 --eval --cfg <config-file> --resume <checkpoint> --data-path <imagenet-path>
 ```
 
 For example, to evaluate the `Swin Base` model on a single GPU, run:
 ```bash
-python -m torch.distributed.launch --nproc_per_node 1 main_finetune.py \
+python -m torch.distributed.launch --nproc_per_node 1 main_simmim.py \
 --eval --cfg configs/swin_base__800ep/simmim_finetune__swin_base__img224_window7__800ep.yaml --resume simmim_finetune__swin_base__img224_window7__800ep.pth --data-path <imagenet-path>
 ```
 
@@ -123,13 +123,13 @@ python -m torch.distributed.launch --nproc_per_node 16 main_simmim.py \
 ### Fine-tuning pre-trained models
 To fine-tune models pre-trained by `SimMIM`, run:
 ```bash
-python -m torch.distributed.launch --nproc_per_node <num-of-gpus-to-use> main_finetune.py \ 
+python -m torch.distributed.launch --nproc_per_node <num-of-gpus-to-use> main_simmim.py \
 --cfg <config-file> --data-path <imagenet-path> --pretrained <pretrained-ckpt> [--batch-size <batch-size-per-gpu> --output <output-directory> --tag <job-tag>]
 ```
 
 For example, to fine-tune `Swin Base` pre-trained by `SimMIM` on one DGX-2 server, run:
 ```bash
-python -m torch.distributed.launch --nproc_per_node 16 main_finetune.py \ 
+python -m torch.distributed.launch --nproc_per_node 16 main_simmim.py \
 --cfg configs/swin_base__800ep/simmim_finetune__swin_base__img224_window7__800ep.yaml --batch-size 128 --data-path <imagenet-path> --pretrained <pretrained-ckpt> [--output <output-directory> --tag <job-tag>]
 ```
 

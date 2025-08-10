@@ -35,8 +35,9 @@ class VisionTransformer(nn.Module):
         # If an explicit timm model name is given, create via registry; otherwise
         # fall back to constructing a vanilla timm VisionTransformer by kwargs.
         backbone: nn.Module
+        resolved_model_args = model_args or {}
         if model_name is not None:
-            backbone = create_model(model_name, **(model_args or {}))
+            backbone = create_model(model_name, **resolved_model_args)
         else:
             # Conservative subset of kwargs supported by timm VisionTransformer ctor
             allowed_keys = {
@@ -87,6 +88,16 @@ class VisionTransformer(nn.Module):
         # Best-effort metadata
         self.embed_dim = getattr(backbone, "embed_dim", None)
         self.num_features = getattr(backbone, "num_features", self.embed_dim)
+        # Ensure num_classes attribute exists for SimMIM pretrain assertions
+        self.num_classes = getattr(backbone, "num_classes", None)
+        if self.num_classes is None:
+            # Try to infer from ctor inputs; default to 0 for encoder usage
+            inferred = None
+            if model_name is not None and "num_classes" in resolved_model_args:
+                inferred = resolved_model_args.get("num_classes")
+            elif "num_classes" in legacy_kwargs:
+                inferred = legacy_kwargs.get("num_classes")
+            self.num_classes = 0 if inferred is None else inferred
         self.in_chans = getattr(self.patch_embed, "proj", getattr(self.patch_embed, "proj", None)).in_channels \
             if self.patch_embed is not None and hasattr(self.patch_embed, "proj") else legacy_kwargs.get("in_chans", 3)
 

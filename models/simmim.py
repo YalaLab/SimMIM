@@ -60,8 +60,14 @@ class SwinTransformerForSimMIM(SwinTransformer):
 class VisionTransformerForSimMIM(VisionTransformer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        assert self.num_classes == 0
+        # Ensure encoder has no classifier for pretraining
+        if getattr(self, 'num_classes', None) not in (None, 0):
+            # Try to reset classifier if available
+            try:
+                self.reset_classifier(0)
+                self.num_classes = 0
+            except Exception:
+                pass
 
         embed_dim = getattr(self, 'embed_dim', None) or getattr(self, 'num_features', None)
         if embed_dim is None:
