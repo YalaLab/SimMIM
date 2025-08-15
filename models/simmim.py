@@ -169,24 +169,33 @@ def build_simmim(config):
             use_checkpoint=config.TRAIN.USE_CHECKPOINT)
         encoder_stride = 32
     elif model_type == 'vit':
-        encoder = VisionTransformerForSimMIM(
-            img_size=config.DATA.IMG_SIZE,
-            patch_size=config.MODEL.VIT.PATCH_SIZE,
-            in_chans=config.MODEL.VIT.IN_CHANS,
-            num_classes=0,
-            embed_dim=config.MODEL.VIT.EMBED_DIM,
-            depth=config.MODEL.VIT.DEPTH,
-            num_heads=config.MODEL.VIT.NUM_HEADS,
-            mlp_ratio=config.MODEL.VIT.MLP_RATIO,
-            qkv_bias=config.MODEL.VIT.QKV_BIAS,
-            drop_rate=config.MODEL.DROP_RATE,
-            drop_path_rate=config.MODEL.DROP_PATH_RATE,
-            norm_layer=partial(nn.LayerNorm, eps=1e-6),
-            init_values=config.MODEL.VIT.INIT_VALUES,
-            use_abs_pos_emb=config.MODEL.VIT.USE_APE,
-            use_rel_pos_bias=config.MODEL.VIT.USE_RPB,
-            use_shared_rel_pos_bias=config.MODEL.VIT.USE_SHARED_RPB,
-            use_mean_pooling=config.MODEL.VIT.USE_MEAN_POOLING)
+        # Use build_vit to properly handle MODEL_ARGS including pretrained weights
+        from .vision_transformer import build_vit
+        base_encoder = build_vit(config)
+        
+        # Wrap with SimMIM-specific functionality  
+        encoder = VisionTransformerForSimMIM()
+        
+        # Copy essential attributes without circular references
+        encoder.backbone = base_encoder
+        encoder.patch_embed = base_encoder.patch_embed
+        encoder.cls_token = base_encoder.cls_token
+        encoder.pos_embed = base_encoder.pos_embed
+        encoder.pos_drop = base_encoder.pos_drop
+        encoder.blocks = base_encoder.blocks
+        encoder.norm = base_encoder.norm
+        encoder.head = base_encoder.head
+        encoder.embed_dim = getattr(base_encoder, 'embed_dim', None)
+        encoder.num_features = getattr(base_encoder, 'num_features', None)
+        encoder.num_classes = getattr(base_encoder, 'num_classes', 0)
+        encoder.in_chans = getattr(base_encoder, 'in_chans', 3)
+        encoder.patch_size = getattr(base_encoder, 'patch_size', 16)
+        encoder.rel_pos_bias = getattr(base_encoder, 'rel_pos_bias', None)
+        
+        # Add the mask token for SimMIM
+        embed_dim = encoder.embed_dim or encoder.num_features or 768
+        encoder.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        encoder._trunc_normal_(encoder.mask_token, std=.02)
         encoder_stride = 16
     else:
         raise NotImplementedError(f"Unknown pre-train model: {model_type}")

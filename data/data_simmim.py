@@ -126,13 +126,6 @@ def build_loader_simmim(config, logger):
         'collate_fn': collate_fn,
     }
 
-    # Only pass prefetch_factor/persistent_workers when workers > 0
-    if num_workers > 0:
-        if hasattr(config.DATA, 'PREFETCH_FACTOR'):
-            dataloader_kwargs['prefetch_factor'] = int(config.DATA.PREFETCH_FACTOR)
-        if hasattr(config.DATA, 'PERSISTENT_WORKERS'):
-            dataloader_kwargs['persistent_workers'] = bool(config.DATA.PERSISTENT_WORKERS)
-
     dataloader = DataLoader(dataset, **dataloader_kwargs)
     
     return dataloader

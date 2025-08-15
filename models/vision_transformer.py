@@ -38,6 +38,7 @@ class VisionTransformer(nn.Module):
         resolved_model_args = model_args or {}
         if model_name is not None:
             backbone = create_model(model_name, **resolved_model_args)
+            print("Built timm model", model_name, "with args", resolved_model_args)
         else:
             # Conservative subset of kwargs supported by timm VisionTransformer ctor
             allowed_keys = {
@@ -72,6 +73,7 @@ class VisionTransformer(nn.Module):
             from timm.models.vision_transformer import VisionTransformer as TimmViT
 
             backbone = TimmViT(**ctor_kwargs)  # type: ignore[arg-type]
+            print("Built timm model", model_name, "with args", resolved_model_args)
 
         # Keep a handle to the backbone and expose expected attributes for SimMIM
         self.backbone = backbone

@@ -1,0 +1,5 @@
+[default]
+entity = yala-lab
+project = vl-ssl
+base_url = https://api.wandb.ai
+

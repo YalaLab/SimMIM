@@ -100,6 +100,19 @@ _C.MODEL.VIT.USE_MEAN_POOLING = False
 _C.MODEL.VIT.MODEL = ''            # e.g., 'vit_base_patch16_224' (timm model name)
 _C.MODEL.VIT.MODEL_NAME = ''       # alias, in case some configs prefer MODEL_NAME
 _C.MODEL.VIT.MODEL_ARGS = CN()     # arbitrary kwargs forwarded to timm.create_model
+# Common MODEL_ARGS that can be overridden in config files
+_C.MODEL.VIT.MODEL_ARGS.pretrained = False
+_C.MODEL.VIT.MODEL_ARGS.img_size = 224
+_C.MODEL.VIT.MODEL_ARGS.in_chans = 3
+_C.MODEL.VIT.MODEL_ARGS.patch_size = 16
+_C.MODEL.VIT.MODEL_ARGS.embed_dim = 768
+_C.MODEL.VIT.MODEL_ARGS.depth = 12
+_C.MODEL.VIT.MODEL_ARGS.num_heads = 12
+_C.MODEL.VIT.MODEL_ARGS.mlp_ratio = 4.0
+_C.MODEL.VIT.MODEL_ARGS.qkv_bias = True
+_C.MODEL.VIT.MODEL_ARGS.drop_rate = 0.0
+_C.MODEL.VIT.MODEL_ARGS.drop_path_rate = 0.0
+_C.MODEL.VIT.MODEL_ARGS.num_classes = 1000
 
 # -----------------------------------------------------------------------------
 # Training settings

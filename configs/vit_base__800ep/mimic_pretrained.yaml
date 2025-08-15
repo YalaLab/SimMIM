@@ -2,7 +2,14 @@ MODEL:
   TYPE: vit
   NAME: simmim_pretrain
   DROP_PATH_RATE: 0.1
+  NUM_CLASSES: 0  # Encoder mode for SimMIM pretraining
   VIT:
+    # Use timm's pretrained vit_base_patch16_224 model
+    MODEL: vit_base_patch16_224
+    MODEL_ARGS:
+      pretrained: true
+      img_size: 448  # Match DATA.IMG_SIZE for this config
+      num_classes: 0  # Encoder mode for SimMIM pretraining
     PATCH_SIZE: 16
     IN_CHANS: 3
     EMBED_DIM: 768
@@ -27,7 +34,7 @@ DATA:
 TRAIN:
   EPOCHS: 800
   WARMUP_EPOCHS: 10
-  BASE_LR: 1e-4
+  BASE_LR: 5e-5
   WARMUP_LR: 5e-7
   WEIGHT_DECAY: 0.05
   USE_CHECKPOINT: False  # Enable gradient checkpointing for memory efficiency
